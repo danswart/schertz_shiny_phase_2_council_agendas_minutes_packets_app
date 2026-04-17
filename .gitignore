@@ -10,6 +10,12 @@ cache/
 cookies.txt
 *.pdf
 
+deploy_app/data/raw/
+deploy_app/data/derived/*.csv
+deploy_app/data/derived/*.rds
+deploy_app/cache/
+deploy_app/logs/
+
 # R / RStudio
 .Rhistory
 .Rapp.history

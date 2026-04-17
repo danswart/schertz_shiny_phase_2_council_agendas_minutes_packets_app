@@ -58,7 +58,44 @@ load_documents <- function(cfg = schertz_config) {
     dplyr::arrange(dplyr::desc(.data$meeting_date), .data$title)
 }
 
+load_refresh_metadata <- function(cfg = schertz_config) {
+  meta_path <- file.path(cfg$derived_dir, "refresh_metadata.csv")
+
+  if (!file.exists(meta_path)) {
+    return(NULL)
+  }
+
+  meta <- tryCatch(
+    {
+      readr::read_csv(meta_path, show_col_types = FALSE)
+    },
+    error = function(e) {
+      NULL
+    }
+  )
+
+  if (is.null(meta) || nrow(meta) == 0) {
+    return(NULL)
+  }
+
+  meta
+}
+
+format_refresh_time <- function(meta) {
+  if (is.null(meta) || !"refreshed_at" %in% names(meta) || is.na(meta$refreshed_at[1])) {
+    return("Unknown")
+  }
+
+  parsed <- suppressWarnings(as.POSIXct(meta$refreshed_at[1], tz = Sys.timezone()))
+  if (is.na(parsed)) {
+    return(as.character(meta$refreshed_at[1]))
+  }
+
+  format(parsed, "%B %d, %Y at %I:%M %p")
+}
+
 documents <- load_documents()
+refresh_meta <- load_refresh_metadata()
 
 safe_choices <- function(x) {
   vals <- sort(unique(x))
@@ -78,8 +115,10 @@ max_date <- if (nrow(documents) > 0 && any(!is.na(documents$meeting_date))) {
   Sys.Date()
 }
 
+last_refreshed_text <- format_refresh_time(refresh_meta)
+
 ui <- bslib::page_sidebar(
-  title = "Schertz City Council Documents — Prototype 1",
+  title = "Schertz City Council Documents — Phase 2",
   theme = bslib::bs_theme(version = 5),
   sidebar = bslib::sidebar(
     width = 320,
@@ -120,6 +159,11 @@ ui <- bslib::page_sidebar(
     tags$p(
       style = "font-size: 0.9em; color: #555;",
       "This app reads local finished files only. Full-text search works where extracted text is available."
+    ),
+    tags$p(
+      style = "font-size: 0.9em; color: #555; margin-bottom: 0;",
+      tags$strong("Last refreshed: "),
+      last_refreshed_text
     )
   ),
   bslib::card(
@@ -184,10 +228,15 @@ server <- function(input, output, session) {
     full_text_count <- sum(nzchar(documents$text_extracted), na.rm = TRUE)
 
     shiny::HTML(sprintf(
-      "<strong>%s</strong> of <strong>%s</strong> documents shown. <strong>%s</strong> documents currently include extracted text.",
+      paste0(
+        "<strong>%s</strong> of <strong>%s</strong> documents shown. ",
+        "<strong>%s</strong> documents currently include extracted text. ",
+        "<strong>Last refreshed:</strong> %s."
+      ),
       format(nrow(docs), big.mark = ","),
       format(nrow(documents), big.mark = ","),
-      format(full_text_count, big.mark = ",")
+      format(full_text_count, big.mark = ","),
+      last_refreshed_text
     ))
   })
 
