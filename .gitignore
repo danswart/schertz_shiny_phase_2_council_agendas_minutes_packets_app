@@ -1,0 +1,98 @@
+# Current as of: 2026-04-15
+
+#####  NO INLINE COMMENTS!  #####
+
+# Project-specific runtime and local artifacts
+data/raw/
+data/derived/*.csv
+data/derived/documents_with_text.rds
+cache/
+cookies.txt
+*.pdf
+
+# R / RStudio
+.Rhistory
+.Rapp.history
+.RData
+.RDataTmp
+.Ruserdata
+.Rproj.user/
+*.Rproj.user
+*-Ex.R
+
+# Local settings / secrets
+.Renviron
+.Rprofile
+.httr-oauth
+.env
+.secrets/
+
+# Quarto / R Markdown / knitr
+.quarto/
+_freeze/
+*_files/
+*_cache/
+cache_data/
+**/*_cache/
+**/cache_data/
+*.utf8.md
+*.knit.md
+temp.Rmd
+
+# Rendered outputs
+*.html
+Rplots.pdf
+
+# Keep selected HTML files when needed
+!header.html
+!giscus.html
+!vignettes/*.html
+
+# Sites / docs
+_site/
+site_libs/
+
+# Package build / check
+/*.tar.gz
+/*.Rcheck/
+/Meta/
+Meta/
+inst/doc/
+
+# Package management
+renv/
+packrat/
+
+# Logs
+*.log
+
+# Temporary / scratch / deletion markers
+*.tobedeleted
+crc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Common large local data folders
+data-raw/
+raw-data/
+data_raw/
+raw_data/
+data-clean/
+annual_budgets/
+
+# Large local files by naming convention
+large_*.rds
+large_*.RDS
+large_*.csv
+large_*.xlsx
+temp-*.rds
+temp-*.RDS
+
+# Optional project folders
+figures/
+pdf/
+docs/
+.Rproj.user
+.quarto

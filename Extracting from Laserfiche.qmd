@@ -1,0 +1,270 @@
+---
+title: "Extracting from Laserfiche"
+format: html
+---
+
+## Quarto
+
+Then launch the app:
+
+```{r}
+
+shiny::runApp("app.R", launch.browser = TRUE)
+
+```
+
+
+
+Test 1
+
+```{r}
+source("R/00_config.R")
+source("R/discover_laserfiche_minutes.R")
+source("R/extract_laserfiche_minutes_text.R")
+
+lf_minutes <- schertz_discover_laserfiche_minutes()
+lf_minutes <- schertz_add_text_to_laserfiche_minutes(lf_minutes)
+```
+
+Test 2
+
+```{r}
+docs <- readRDS("data/derived/documents.rds")
+
+docs_merged <- dplyr::bind_rows(
+  docs,
+  lf_minutes |>
+    dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01")) |>
+    dplyr::anti_join(
+      docs |>
+        dplyr::filter(doc_type == "minutes") |>
+        dplyr::select(meeting_date),
+      by = "meeting_date"
+    )
+)
+
+source("R/build_search_data.R")
+docs_merged <- schertz_build_search_data(docs_merged, cfg = schertz_config)
+
+```
+
+Test 3
+
+```{r}
+lf_minutes |>
+  dplyr::count(text_available) |>
+  print()
+```
+
+
+Test 4
+
+```{r}
+docs <- readRDS("data/derived/documents.rds")
+
+docs_merged <- dplyr::bind_rows(
+  docs,
+  lf_minutes |>
+    dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01")) |>
+    dplyr::anti_join(
+      docs |>
+        dplyr::filter(doc_type == "minutes") |>
+        dplyr::select(meeting_date),
+      by = "meeting_date"
+    )
+)
+
+source("R/build_search_data.R")
+docs_merged <- schertz_build_search_data(docs_merged, cfg = schertz_config)
+
+docs_merged |>
+  dplyr::count(text_available) |>
+  print()
+```
+
+
+Test 5
+
+```{r}
+docs <- readRDS("data/derived/documents.rds")
+
+docs_merged <- dplyr::bind_rows(
+  docs |>
+    dplyr::filter(!(source_system == "laserfiche" & doc_type == "minutes")),
+  lf_minutes |>
+    dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01"))
+)
+
+source("R/build_search_data.R")
+docs_merged <- schertz_build_search_data(docs_merged, cfg = schertz_config)
+
+docs_merged |>
+  dplyr::count(text_available) |>
+  print()
+```
+
+Test 6
+
+```{r}
+docs_merged |>
+  dplyr::filter(grepl("01-15-1974|01-15-74|January 15, 1974", title, ignore.case = TRUE)) |>
+  dplyr::mutate(text_length = nchar(text_extracted)) |>
+  dplyr::select(meeting_date, title, source_system, text_available, text_length, text_extracted) |>
+  print(width = Inf)
+```
+
+Test 7
+
+```{r}
+doc_1974 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/DocView.aspx?id=37908&dbid=1&repo=SCHERTZ") |>
+  httr2::req_perform() |>
+  httr2::resp_body_string()
+
+cat(doc_1974)
+```
+
+test 8
+
+```{r}
+target_1974 <- docs_merged |>
+  dplyr::filter(meeting_date == as.Date("1974-01-15")) |>
+  dplyr::select(title, source_record_id, document_url, text_extracted)
+
+target_1974
+```
+
+Test 9
+
+```{r}
+page_1974 <- schertz_laserfiche_minutes_text_read_html(
+  target_1974$document_url[[1]],
+  cfg = schertz_config
+)
+
+page_1974 |>
+  rvest::html_elements("body") |>
+  rvest::html_text2() |>
+  print()
+```
+
+Test 10
+
+```{r}
+doc_js <- readLines(
+  "https://laserfiche.schertzweb.com/WebLink/bundles/app.bundle.js?v=10.2",
+  warn = FALSE
+)
+
+stringr::str_extract_all(
+  paste(doc_js, collapse = " "),
+  "Plain Text|plain text|plaintext|TextView|textview|GetDocumentInfo|GetPageInfo|GetEdocInfo|Get.*Text|Document.*Text|Page.*Text"
+) |>
+  unlist() |>
+  unique() |>
+  sort() |>
+  print()
+```
+
+Test 11
+
+```{r}
+txt <- paste(doc_js, collapse = " ")
+
+patterns <- c(
+  "plainText",
+  "PlainText",
+  "viewPlainText",
+  "ViewPlainText",
+  "textPane",
+  "TextPane",
+  "GetDocumentText",
+  "GetText",
+  "GetPageText",
+  "GetEdocInfo",
+  "GetPageInfo",
+  "GetDocumentInfo"
+)
+
+hits <- unlist(lapply(patterns, function(pat) {
+  m <- gregexpr(pat, txt, ignore.case = FALSE)[[1]]
+  if (m[1] == -1) return(character(0))
+  starts <- pmax(1, m - 140)
+  ends <- pmin(nchar(txt), m + 220)
+  vapply(seq_along(starts), function(i) substr(txt, starts[i], ends[i]), character(1))
+}))
+
+unique(hits) |>
+  print()
+```
+
+Test 11
+
+```{r}
+docinfo_1974 <- schertz_laserfiche_get_document_info(
+  as.integer(target_1974$source_record_id[[1]]),
+  cfg = schertz_config
+)
+
+docinfo_1974
+```
+
+Test 12
+
+```{r}
+text_resp_1974 <- httr2::request(
+  "https://laserfiche.schertzweb.com/WebLink/DocumentService.aspx/GetTextHtmlForPage"
+) |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_cookie_preserve(file.path("cache", "laserfiche_cookies.txt")) |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      documentId = as.integer(target_1974$source_record_id[[1]]),
+      pageNum = 1,
+      showAnn = FALSE,
+      searchUuid = ""
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform() |>
+  httr2::resp_body_string()
+
+cat(text_resp_1974)
+```
+
+Test 13
+
+```{r}
+source("R/00_config.R")
+source("R/discover_laserfiche_minutes.R")
+source("R/extract_laserfiche_minutes_text.R")
+
+lf_minutes <- schertz_discover_laserfiche_minutes()
+lf_minutes <- schertz_add_text_to_laserfiche_minutes(lf_minutes, only_missing = FALSE)
+```
+
+Test 14
+
+```{r}
+docs <- readRDS("data/derived/documents.rds")
+
+docs_merged <- dplyr::bind_rows(
+  docs |>
+    dplyr::filter(!(source_system == "laserfiche" & doc_type == "minutes")),
+  lf_minutes |>
+    dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01"))
+)
+
+source("R/build_search_data.R")
+docs_merged <- schertz_build_search_data(docs_merged, cfg = schertz_config)
+```
+
+Test 15
+
+```{r}
+file.info("data/derived/documents.csv")[, "size"]
+file.info("data/derived/documents.rds")[, "size"]
+file.info("data/derived/documents_with_text.csv")[, "size"]
+file.info("data/derived/documents_with_text.rds")[, "size"]
+```
+

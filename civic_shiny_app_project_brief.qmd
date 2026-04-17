@@ -1,0 +1,654 @@
+---
+title: "Project Brief for Future Civic Document Shiny Apps"
+format:
+  html: default
+  typst: default
+---
+
+Successfully deployed to <https://danswart.shinyapps.io/schertz-council-docs/>
+
+2026-04-15
+
+
+
+# Purpose of this document
+
+This document is written for the assistant, not for the end user.
+
+Its purpose is to preserve the key lessons learned while building the Schertz City Council document-search Shiny prototype so that future similar projects can start from the right mental model and avoid rediscovering the same methods, pitfalls, and architecture decisions.
+
+This is intended to be fed to the assistant at the start of future similar projects.
+
+Use this document as:
+
+- an implementation playbook
+- an architecture guide
+- a debugging checklist
+- a startup research plan
+- a record of what worked and what failed
+
+Use it for projects involving:
+
+- municipal agendas
+- minutes
+- archived public records
+- civic-facing Shiny apps
+- Laserfiche
+- Destiny Hosted
+- Granicus
+- public document portals
+- searchable local-government archives
+
+# Project philosophy
+
+## 1. The app should be thin.
+
+The Shiny app should read finished local files only.
+
+The app should not:
+
+- scrape websites live during ordinary user interaction
+- discover new records on startup
+- call archive portals inside reactive search logic
+- depend on public portals being stable
+
+The app should:
+
+- load local `.rds` and `.csv` files
+- rebuild `search_text` from current fields
+- provide filters and search only
+- expose links to records or PDFs
+- remain fast and predictable
+
+## 2. The pipeline should do the hard work.
+
+The correct order is:
+
+1. discover records
+2. normalize metadata
+3. download or retrieve content
+4. extract text
+5. merge and deduplicate
+6. write final local files
+7. let Shiny read those files
+
+# Preferred architecture
+
+## 3. Use modular source-specific scripts.
+
+Never try to solve all source systems in one giant script.
+
+Create one module per source or source type.
+
+Preferred pattern:
+
+- `R/00_config.R`
+- `R/run_pipeline.R`
+- `R/normalize_documents.R`
+- `R/download_documents.R`
+- `R/extract_text.R`
+- `R/build_search_data.R`
+
+Source-specific modules:
+
+- `R/discover_destinyhosted_agendas.R`
+- `R/discover_destinyhosted_minutes.R`
+- `R/discover_laserfiche_minutes.R`
+- later:
+  - `R/discover_boards_commissions.R`
+  - `R/discover_city_calendar.R`
+  - `R/discover_granicus.R`
+
+Source-specific text modules when needed:
+
+- `R/extract_laserfiche_minutes_text.R`
+- later, if needed:
+  - `R/extract_granicus_text.R`
+  - `R/extract_special_archive_text.R`
+
+## 4. Normalize all modules to a common schema.
+
+Every discovery module should output a tibble with the same fields, or fields that can easily be transformed into the same structure.
+
+Preferred schema:
+
+- `doc_id`
+- `source_system`
+- `source_category`
+- `meeting_body`
+- `meeting_type`
+- `meeting_date`
+- `fiscal_year`
+- `doc_type`
+- `title`
+- `source_page_url`
+- `document_url`
+- `pdf_url`
+- `source_record_id`
+- `file_name`
+- `local_file`
+- `text_extracted`
+- `text_available`
+- `n_pages`
+- `discovered_at`
+- `downloaded_at`
+- `text_extracted_at`
+- `is_active`
+- `notes`
+
+Then merge and deduplicate in separate steps.
+
+# First questions to answer on any new project
+
+## 5. At the start of a new civic document project, determine these things immediately.
+
+### Source-system questions
+- What system is hosting the records?
+- Is it one system or several?
+- Are current records stored differently from historical records?
+- Are agendas and minutes in the same system or different systems?
+
+### Retrieval questions
+- Does the system expose direct PDF links?
+- Is the visible page ordinary HTML or a JavaScript shell?
+- Are there internal service endpoints?
+- Is there a “View Text” or “Plain Text” mode?
+- Is there an RSS feed?
+- Is there a JSON API?
+- Are there cookies or session requirements?
+
+### Document-type questions
+- Are files born-digital PDFs?
+- Are some rows only metadata records?
+- Are some old records scans or image-based objects?
+- Is there a signal like `isEdoc = TRUE` that identifies good candidates?
+
+### Merge questions
+- Which source should be preferred when overlap exists?
+- Do recent records overlap with archive records?
+- What is the deduplication key?
+- Is `meeting_date` enough, or must title and type be included too?
+
+### Search questions
+- Which rows will be truly full-text searchable?
+- Which rows will only be metadata searchable?
+- How will the UI represent this honestly?
+
+# Start-up workflow for a new portal
+
+## 6. The first ten technical things to test on a new portal
+
+1. Open the human-facing page in a browser and identify the source system.
+2. Test whether `rvest::read_html()` sees real rows or only a JS shell.
+3. Look for a service bundle or JS app file.
+4. Inspect JS for service endpoints.
+5. Test one discovery endpoint manually.
+6. Test one metadata endpoint manually.
+7. Test one document info endpoint manually.
+8. Test whether a plain-text or text-view endpoint exists.
+9. Test whether direct PDF/open behavior exists.
+10. Save one success path before attempting generalization.
+
+Do not generalize too early.
+
+# Lessons about specific systems
+
+## 7. Destiny Hosted lessons
+
+Destiny Hosted was comparatively cooperative.
+
+Useful properties:
+
+- current records were easier to discover
+- document links were more straightforward
+- recent agenda packets and minutes were retrievable
+- extraction with `pdftools` worked well for many records
+
+Practical lesson:
+
+Use Destiny Hosted for the easy-wins phase first.
+
+If there is overlap with archives, let Destiny Hosted usually win for recent/current records.
+
+## 8. Laserfiche lessons
+
+Laserfiche was much more complicated, but also much more powerful once understood.
+
+### 8a. Visible HTML is often misleading
+Reading `Browse.aspx` or `DocView.aspx` with `rvest::read_html()` often returns only:
+
+- loading text
+- JavaScript bootstrap code
+- viewer scaffolding
+- no usable rows
+- no real document text
+
+This does not mean the data is unavailable.
+
+### 8b. Internal service endpoints are the real source of truth
+Important endpoints discovered:
+
+Folder and metadata side:
+
+- `FolderListingService.aspx/GetFolderListing2`
+- `FolderListingService.aspx/GetFolderListingIds`
+- `FolderListingService.aspx/GetBreadCrumbs`
+- `FolderListingService.aspx/GetDocumentInfo`
+
+Text side:
+
+- `DocumentService.aspx/GetTextHtmlForPage`
+
+This last endpoint was the critical breakthrough.
+
+### 8c. `DocView.aspx` body text is not the document text
+Scraping `DocView.aspx` body produced shell text like:
+
+- `Loading...`
+- viewer labels
+- JavaScript
+
+That created false positives.
+
+Important rule:
+
+Do not treat `DocView.aspx` body text as extracted document text.
+
+### 8d. The “View Text” toggle matters
+If the user reports a “View Text” or “View Plain Text” toggle in the portal, assume there is an underlying service endpoint for text retrieval.
+
+Do not pivot to OCR too quickly.
+
+### 8e. `isEdoc = TRUE` is the key signal
+In Schertz, the correct strategic boundary was:
+
+- include `isEdoc = TRUE`
+- exclude `isEdoc = FALSE` from full-text ambitions
+
+That was the right choice.
+
+### 8f. Session handling matters
+Laserfiche behaved like a session-limited or cookie-dependent system.
+
+Correct mitigation:
+
+- warm a session first
+- preserve cookies with a file
+- use a stable user agent
+- add sleeps
+- add retries with backoff
+- do not hammer the service
+
+### 8g. Do not use Laserfiche inside live app logic
+Laserfiche belongs in preprocessing only.
+
+# Rules for deciding what to include
+
+## 9. What to include by default
+
+Include by default:
+
+- directly downloadable born-digital PDFs
+- recent current-system records
+- archive records with strong evidence of reliable text retrieval
+- `isEdoc = TRUE` records when there is a text service
+
+## 10. What to exclude by default
+
+Exclude by default unless the user explicitly wants them:
+
+- image-only records
+- scanned documents requiring OCR
+- unstable session-dependent live retrieval in the app
+- archive records with no reliable text path
+- records that require heroic handling but add little value
+
+## 11. OCR default rule
+
+Default rule:
+
+- do not pursue OCR unless the user clearly wants it
+
+Reason:
+
+- low quality
+- high complexity
+- noisy search results
+- fragile pipeline
+- often not worth it for civic documents if a cleaner subset is available
+
+# Data-processing lessons
+
+## 12. Save intermediate outputs at every major stage
+
+Always save:
+
+- raw discovery output
+- normalized metadata
+- post-download output
+- post-text-extraction output
+- final merged dataset
+
+Helpful files include:
+
+- `*_documents.rds`
+- `*_documents.csv`
+- `*_raw_rows.rds`
+- `*_raw_rows.csv`
+- `*_with_text.rds`
+- final `documents.rds`
+
+## 13. The app should never be the first place a data problem is discovered
+
+Validate in R first:
+
+- counts by type
+- counts by `text_available`
+- overlap by date
+- sample rows
+- direct `grepl()` on known names
+
+Only then test the app.
+
+## 14. Replace stale rows with enriched rows
+
+If a source is first merged without text and later enriched with text, do not just append the new rows and anti-join by date.
+
+Correct pattern:
+
+- drop old rows from that source/type
+- bind the enriched rows
+- rebuild final search data
+
+This was critical for Laserfiche minutes.
+
+## 15. Rebuild `search_text` every time the app loads
+
+Do not trust stored `search_text`.
+
+Always rebuild it from:
+
+- `title`
+- `meeting_type`
+- `doc_type`
+- `text_extracted`
+
+This avoids stale-index bugs.
+
+# Search validation lessons
+
+## 16. “Has Text” can lie if the wrong text source was captured
+
+A row may show `Has Text = Yes` while containing only:
+
+- shell text
+- viewer text
+- labels
+- portal chrome
+
+Therefore, “Has Text” should really mean:
+
+- has extracted usable document text
+
+Use direct row inspection when suspicious.
+
+## 17. Validate search with hard cases, not easy cases
+
+Good tests:
+
+- a council member’s name
+- a mayor’s name
+- a distinctive place name
+- a known phrase from a historical minute
+- a person whose name should appear across many years
+
+Weak tests:
+
+- budget
+- vote
+- meeting
+- minutes
+
+Generic words can match metadata or titles and are not strong proof of true full-text search.
+
+## 18. Inspect the exact row when in doubt
+
+Use direct row inspection:
+
+- `nchar(text_extracted)`
+- `grepl("name", text_extracted, ignore.case = TRUE)`
+- inspect the actual stored text
+
+This quickly tells whether the problem is:
+
+- extraction source
+- stale search index
+- merge bug
+- app bug
+
+# Debugging workflow that worked best
+
+## 19. Always narrow the scope
+
+When something seems wrong:
+
+1. identify one known record
+2. inspect its row
+3. inspect the stored text length
+4. test exact term presence in that row
+5. test one service call manually
+6. only then generalize
+
+This worked much better than broad speculative debugging.
+
+## 20. Use manual service-call probes before rewriting modules
+
+For example:
+
+- call `GetFolderListing2` manually
+- inspect the JSON
+- call `GetDocumentInfo`
+- inspect page count and `isEdoc`
+- call `GetTextHtmlForPage` for page 1
+- confirm real text
+- then rewrite extraction module
+
+That order is safer than guessing.
+
+## 21. Interpret server errors cautiously
+
+HTTP 500 does not necessarily mean:
+
+- your code is wrong
+- the endpoint is invalid
+
+It may mean:
+
+- session issue
+- cookie issue
+- rate limit
+- licensing/session cap
+- transient portal instability
+
+Never overinterpret a single 500.
+
+# Preferred module behavior
+
+## 22. Discovery modules should
+
+- be source-specific
+- return normalized metadata rows
+- avoid doing too much at once
+- save intermediate outputs
+- record notes about assumptions
+
+## 23. Text modules should
+
+- accept the discovered metadata rows
+- enrich only relevant records
+- update `text_extracted`
+- update `text_available`
+- update `text_extracted_at`
+- save enriched outputs
+
+## 24. Build-search module should
+
+- rebuild `search_text`
+- build links appropriate for source type
+- save final `documents.rds`
+- save final `documents.csv`
+
+## 25. App should
+
+- load local files only
+- rebuild `search_text`
+- expose filters
+- expose “Has Text”
+- expose source label
+- never touch live portals
+
+# Recommended file/module skeleton
+
+## 26. Baseline project structure
+
+```text
+project/
+  app.R
+  README_start_here.qmd
+  R/
+    00_config.R
+    run_pipeline.R
+    normalize_documents.R
+    build_search_data.R
+    download_documents.R
+    extract_text.R
+    discover_destinyhosted_agendas.R
+    discover_destinyhosted_minutes.R
+    discover_laserfiche_minutes.R
+    extract_laserfiche_minutes_text.R
+  data/
+    raw/
+    derived/
+  cache/
+  logs/
+```
+
+## 27. Good config values to expose
+
+`00_config.R` should centralize:
+
+- user agent
+- request timeout
+- sleep seconds
+- folder paths
+- meeting body
+- derived dir
+- raw dir
+- cache dir
+- log dir
+
+# Important merge and deduplication rules
+
+## 28. Deduplicate after both streams are assembled
+
+For minutes, preferred deduplication key was primarily:
+
+- `meeting_body`
+- `meeting_date`
+- `doc_type`
+
+Then prefer source priority.
+
+## 29. Use source priority consciously
+
+For Schertz:
+
+- keep current source for overlapping recent minutes
+- use Laserfiche as historical backfill
+
+Do not let archive rows overwrite good current rows unnecessarily.
+
+# User-facing honesty rules
+
+## 30. Never overpromise corpus coverage
+
+A good civic-document app should be honest about:
+
+- which years are covered
+- which records are full-text searchable
+- which records are only metadata searchable
+- which records were excluded
+
+## 31. Good coverage-note language
+
+Useful phrasing:
+
+- “This app indexes electronically retrievable records.”
+- “Historical archive coverage has been expanded where reliable text extraction was possible.”
+- “Some older image-style archival records are not yet included in full-text search.”
+
+# What worked especially well in the Schertz project
+
+## 32. The winning combination
+
+The project succeeded because of this combination:
+
+- thin app
+- heavy preprocessing pipeline
+- source-specific modules
+- saving intermediate outputs
+- preferring current system for recent rows
+- using Laserfiche service endpoints
+- filtering to `isEdoc = TRUE`
+- using `GetTextHtmlForPage`
+- rebuilding `search_text`
+- validating with real names and historical records
+
+This should be the default blueprint for similar projects.
+
+# Mistakes to avoid next time
+
+## 33. Avoid these mistakes
+
+- putting live scraping inside app logic
+- trusting `DocView.aspx` body text
+- assuming visible HTML contains real content
+- assuming `Has Text = Yes` means useful text
+- trusting stored `search_text`
+- trying to solve all sources in one function
+- pursuing OCR when the user does not want it
+- concluding too quickly that a portal has no usable text source
+- assuming 500 errors always mean code failure
+
+# Operational checklist for future projects
+
+## 34. At the start of the next similar project, do this in order
+
+1. identify source systems
+2. decide which source gets a separate module
+3. test whether visible HTML is real or JS shell
+4. search JS for internal service endpoints
+5. identify metadata/folder endpoints
+6. identify document info endpoint
+7. identify text endpoint
+8. determine whether an `isEdoc`-like signal exists
+9. define inclusion/exclusion rules
+10. build thin app only after the pipeline works
+
+# Final instruction to future assistants
+
+## 35. Default assumptions
+
+When starting a similar project, assume the following unless evidence says otherwise:
+
+- the app should be thin
+- the pipeline should do the hard work
+- sources should be modular
+- archive viewers may require internal service calls
+- usable historical full-text is more likely to come from text endpoints than from page scraping
+- `isEdoc = TRUE` is a strong signal to prioritize a record
+- non-edoc records should usually be excluded from full-text scope unless explicitly required
+- stale `search_text` can create false app failures
+- the right debugging move is usually to inspect one row and one service call, not to speculate broadly
+
+If this document is available at the start of a new project, use it as the implementation playbook.

@@ -1,0 +1,718 @@
+---
+title: "Schertz City Council Documents — Prototype 3"
+format:
+  html: default
+  typst: default
+---
+
+## What this prototype does
+
+Prototype 3 follows the stronger pattern used in the original Framingham app:
+
+1. discover documents
+2. save prepared intermediate files
+3. download PDFs
+4. extract PDF text
+5. build a final local search index
+6. let the Shiny app read only the finished local files
+
+The app should **not** scrape websites at startup.
+
+## File structure
+
+- `app.R` — thin Shiny app that reads `data/derived/documents.rds`
+- `R/00_config.R` — config and shared helpers
+- `R/discover_city_hub.R` — reads the Schertz hub page
+- `R/discover_destinyhosted.R` — discovers current City Council packet/minutes links
+- `R/discover_laserfiche.R` — archive scaffold
+- `R/normalize_documents.R` — unifies source outputs
+- `R/download_documents.R` — downloads PDFs to `data/raw/`
+- `R/extract_text.R` — extracts full text with `pdftools`
+- `R/build_search_data.R` — builds final `documents.rds` and `documents.csv`
+- `R/run_pipeline.R` — orchestrates the pipeline
+
+## Recommended first run
+
+```{r}
+
+source("R/run_pipeline.R")
+
+docs <- schertz_build_index(
+  download_files = TRUE,
+  extract_text = TRUE,
+  include_archive = FALSE,
+  start_year = 2019L
+)
+
+```
+
+Then launch the app:
+
+```{r}
+
+shiny::runApp("app.R", launch.browser = TRUE)
+
+```
+
+## What to expect
+
+The app becomes meaningfully searchable only after:
+- PDFs have been downloaded
+- text has been extracted
+- `data/derived/documents.rds` has been rebuilt
+
+Useful checks:
+
+```{r}
+
+nrow(docs)
+sum(nzchar(docs$text_extracted), na.rm = TRUE)
+table(docs$doc_type, useNA = "ifany")
+head(docs[, c("meeting_date", "title", "doc_type", "text_available")], 20)
+
+```
+
+## Intermediate files
+
+This prototype deliberately saves intermediate outputs in `data/derived/`, including:
+
+- `city_hub_links.rds`
+- `destinyhosted_raw_links.rds`
+- `destinyhosted_documents.rds`
+- `documents_normalized.rds`
+- `documents_downloaded.rds`
+- `documents_with_text.rds`
+- final `documents.rds`
+
+That makes debugging easier and keeps the app lightweight.
+
+## Important limitation
+
+The Laserfiche archive stage is still conservative. Prototype 3 is mainly aimed at making the **current-system text extraction pipeline** solid before deeper archive crawling.
+
+### Diagnostic Code
+
+```{r}
+table(docs$text_available, useNA = "ifany")
+```
+
+
+```{r}
+docs |>
+  dplyr::filter(grepl("budget", search_text, ignore.case = TRUE)) |>
+  dplyr::select(meeting_date, title, doc_type) |>
+  head(20)
+```
+
+
+### Testing New Module for Collecting Minutes Data
+
+Test 1
+
+```{r}
+source("R/00_config.R")
+source("R/discover_laserfiche_minutes.R")
+
+lf_minutes <- schertz_discover_laserfiche_minutes()
+
+dplyr::glimpse(lf_minutes)
+
+```
+
+Test 2
+
+```{r}
+root_page <- schertz_laserfiche_minutes_links(
+  "https://laserfiche.schertzweb.com/WebLink/Browse.aspx?id=545783&dbid=1&repo=SCHERTZ",
+  cfg = schertz_config
+)
+
+root_page |>
+  dplyr::select(link_text, absolute_url, is_browse, is_docview) |>
+  print(n = 100)
+
+```
+
+Test 3
+
+```{r}
+page <- xml2::read_html("https://laserfiche.schertzweb.com/WebLink/Browse.aspx?id=545783&dbid=1&repo=SCHERTZ")
+
+rvest::html_elements(page, "a") |>
+  rvest::html_attr("href") |>
+  head(50)
+
+```
+
+Test 4
+
+```{r}
+page |>
+  rvest::html_elements("title, body, script, iframe, frame") |>
+  rvest::html_text2() |>
+  print()
+
+```
+
+Test 5
+
+```{r}
+cat(as.character(page), sep = "\n")
+
+```
+
+Test 6
+
+```{r}
+js <- readLines(
+  "https://laserfiche.schertzweb.com/WebLink/bundles/app.bundle.js?v=10.2",
+  warn = FALSE
+)
+
+stringr::str_extract_all(
+  paste(js, collapse = " "),
+  "api/[A-Za-z0-9_./?=&-]+|Browse\\.aspx\\?[A-Za-z0-9_./?=&-]+|DocView\\.aspx\\?[A-Za-z0-9_./?=&-]+"
+) |>
+  unlist() |>
+  unique() |>
+  sort() |>
+  print()
+
+```
+
+Test 7
+
+```{r}
+txt <- paste(js, collapse = " ")
+
+patterns <- c(
+  "rootFolder", "folderId", "entryId", "children", "document",
+  "browse", "export", "search", "repo", "dbid"
+)
+
+hits <- unlist(lapply(patterns, function(pat) {
+  m <- gregexpr(pat, txt, ignore.case = TRUE)[[1]]
+  if (m[1] == -1) return(character(0))
+  starts <- pmax(1, m - 120)
+  ends <- pmin(nchar(txt), m + 220)
+  vapply(seq_along(starts), function(i) substr(txt, starts[i], ends[i]), character(1))
+}))
+
+unique(hits) |>
+  head(50) |>
+  print()
+```
+
+Test 8
+
+```{r}
+resp <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(list(repoName = "SCHERTZ", folderId = 545783), auto_unbox = TRUE) |>
+  httr2::req_perform()
+
+txt <- httr2::resp_body_string(resp)
+cat(txt)
+
+```
+
+Test 9
+
+```{r}
+resp2 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing2") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 545783,
+      getNewListing = TRUE,
+      start = 0,
+      end = 200,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+cat(httr2::resp_body_string(resp2))
+
+```
+
+Test 10
+
+```{r}
+lf_json <- jsonlite::fromJSON(httr2::resp_body_string(resp2), simplifyDataFrame = TRUE)
+
+tibble::as_tibble(lf_json$data$results) |>
+  dplyr::select(name, entryId, type, extension, isEdoc) |>
+  print(n = 50)
+```
+
+Test 11
+
+```{r}
+lf_2025_2026 <- tibble::as_tibble(lf_json$data$results) |>
+  dplyr::filter(!is.na(entryId), isEdoc, extension == "pdf") |>
+  dplyr::mutate(
+    document_url = paste0(
+      "https://laserfiche.schertzweb.com/WebLink/DocView.aspx?id=",
+      entryId,
+      "&dbid=1&repo=SCHERTZ"
+    )
+  ) |>
+  dplyr::select(name, entryId, document_url)
+
+lf_2025_2026 |>
+  print(n = 50)
+```
+
+Test 12
+
+```{r}
+resp3 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetBreadCrumbs") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      vdirName = "WebLink",
+      repoName = "SCHERTZ",
+      folderId = 545783
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+bc <- jsonlite::fromJSON(httr2::resp_body_string(resp3), simplifyDataFrame = TRUE)
+
+print(bc)
+```
+
+Test 13
+
+```{r}
+resp4 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing2") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 54085,
+      getNewListing = TRUE,
+      start = 0,
+      end = 200,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+fy_json <- jsonlite::fromJSON(httr2::resp_body_string(resp4), simplifyDataFrame = TRUE)
+
+tibble::as_tibble(fy_json$data$results) |>
+  dplyr::select(name, entryId, type, extension, isEdoc) |>
+  print(n = 100)
+```
+
+Test 14
+
+```{r}
+fy_json$data$totalEntries
+```
+
+Test 15
+
+```{r}
+resp5 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing2") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 54085,
+      getNewListing = TRUE,
+      start = 0,
+      end = 100,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+fy_json2 <- jsonlite::fromJSON(httr2::resp_body_string(resp5), simplifyDataFrame = TRUE)
+
+tibble::as_tibble(fy_json2$data$results) |>
+  dplyr::filter(!is.na(entryId)) |>
+  dplyr::select(name, entryId, type, extension, isEdoc) |>
+  print(n = 100)
+
+```
+
+Test 16
+
+```{r}
+resp6 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing2") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 54085,
+      getNewListing = TRUE,
+      start = 40,
+      end = 80,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+fy_json3 <- jsonlite::fromJSON(httr2::resp_body_string(resp6), simplifyDataFrame = TRUE)
+
+tibble::as_tibble(fy_json3$data$results) |>
+  dplyr::filter(!is.na(entryId)) |>
+  dplyr::select(name, entryId, type, extension, isEdoc) |>
+  print(n = 100)
+
+```
+
+Test 17
+
+```{r}
+tibble::as_tibble(fy_json2$data$results) |>
+  dplyr::slice_tail(n = 10) |>
+  dplyr::select(name, entryId)
+```
+
+Test 18
+
+```{r}
+resp7 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListingIds") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 54085,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+cat(httr2::resp_body_string(resp7))
+```
+
+Test 19
+
+```{r}
+all_ids <- jsonlite::fromJSON(httr2::resp_body_string(resp7), simplifyVector = TRUE)$data
+
+visible_ids <- tibble::as_tibble(fy_json2$data$results) |>
+  dplyr::filter(!is.na(entryId)) |>
+  dplyr::pull(entryId) |>
+  as.character()
+
+setdiff(all_ids, visible_ids)
+```
+
+Test 20
+
+```{r}
+purrr::map_dfr(
+  setdiff(all_ids, visible_ids)[1:10],
+  function(id) {
+    resp_tmp <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetBreadCrumbs") |>
+      httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+      httr2::req_body_json(
+        list(
+          vdirName = "WebLink",
+          repoName = "SCHERTZ",
+          folderId = as.integer(id)
+        ),
+        auto_unbox = TRUE
+      ) |>
+      httr2::req_perform()
+
+    bc_tmp <- jsonlite::fromJSON(httr2::resp_body_string(resp_tmp), simplifyDataFrame = TRUE)
+
+    tibble::tibble(
+      entryId = id,
+      last_name = tail(bc_tmp$data$name, 1)
+    )
+  }
+)
+
+```
+
+Test 21
+
+```{r}
+resp8 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing2") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 48605,
+      getNewListing = TRUE,
+      start = 0,
+      end = 200,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+cat(httr2::resp_body_string(resp8))
+```
+
+Test 22
+
+```{r}
+fy_1998_1999 <- jsonlite::fromJSON(httr2::resp_body_string(resp8), simplifyDataFrame = TRUE)
+
+tibble::as_tibble(fy_1998_1999$data$results) |>
+  dplyr::select(name, entryId, type, extension, isEdoc) |>
+  print(n = 100)
+```
+
+Test 23
+
+```{r}
+resp9 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetDocumentInfo") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      dId = 41673
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+cat(httr2::resp_body_string(resp9))
+
+```
+
+Test 24
+
+```{r}
+jsonlite::fromJSON(httr2::resp_body_string(resp9), simplifyDataFrame = FALSE)
+
+```
+
+Test 25
+
+```{r}
+doc_page <- xml2::read_html("https://laserfiche.schertzweb.com/WebLink/DocView.aspx?id=41673&dbid=1&repo=SCHERTZ")
+
+doc_page |>
+  rvest::html_elements("title, body") |>
+  rvest::html_text2() |>
+  print()
+
+```
+
+Test 26
+
+```{r}
+resp10 <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetDocumentInfo") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      dId = 546331
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform()
+
+jsonlite::fromJSON(httr2::resp_body_string(resp10), simplifyDataFrame = FALSE)
+```
+
+Test 27
+
+```{r}
+test_ids <- c(546331, 547235, 545989, 41673, 41688)
+
+purrr::map_dfr(
+  test_ids,
+  function(id) {
+    resp_tmp <- httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetDocumentInfo") |>
+      httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+      httr2::req_body_json(
+        list(
+          repoName = "SCHERTZ",
+          dId = id
+        ),
+        auto_unbox = TRUE
+      ) |>
+      httr2::req_perform()
+
+    info <- jsonlite::fromJSON(httr2::resp_body_string(resp_tmp), simplifyDataFrame = FALSE)
+
+    tibble::tibble(
+      entryId = id,
+      pageCount = info$data$pageCount,
+      isEdoc = info$data$isEdoc
+    )
+  }
+)
+```
+
+Test 28
+
+```{r}
+source("R/00_config.R")
+source("R/discover_laserfiche_minutes.R")
+
+lf_minutes <- schertz_discover_laserfiche_minutes()
+
+dplyr::glimpse(lf_minutes)
+```
+
+Test 29
+
+```{r}
+schertz_laserfiche_service_post <- function(endpoint, body, max_tries = 5L) {
+  url <- paste0(
+    "https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/",
+    endpoint
+  )
+
+  last_err <- NULL
+
+  for (i in seq_len(max_tries)) {
+    out <- tryCatch(
+      {
+        httr2::request(url) |>
+          httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+          httr2::req_body_json(body, auto_unbox = TRUE) |>
+          httr2::req_perform() |>
+          httr2::resp_body_string()
+      },
+      error = function(e) {
+        last_err <<- e
+        NULL
+      }
+    )
+
+    if (!is.null(out)) {
+      return(out)
+    }
+
+    message(
+      "Laserfiche retry ", i, "/", max_tries,
+      " for ", endpoint, " failed: ",
+      conditionMessage(last_err)
+    )
+    Sys.sleep(1.5 * i)
+  }
+
+  stop(last_err)
+}
+
+lf_minutes <- schertz_discover_laserfiche_minutes()
+
+```
+
+Test 29
+
+```{r}
+httr2::request("https://laserfiche.schertzweb.com/WebLink/FolderListingService.aspx/GetFolderListing2") |>
+  httr2::req_headers(`Content-Type` = "application/json; charset=UTF-8") |>
+  httr2::req_body_json(
+    list(
+      repoName = "SCHERTZ",
+      folderId = 54085,
+      getNewListing = TRUE,
+      start = 0,
+      end = 50,
+      sortColumn = "",
+      sortAscending = TRUE
+    ),
+    auto_unbox = TRUE
+  ) |>
+  httr2::req_perform() |>
+  httr2::resp_body_string() |>
+  cat()
+```
+
+Test 30
+
+```{r}
+docs <- readRDS("data/derived/documents.rds")
+
+lf_minutes |>
+  dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01")) |>
+  dplyr::inner_join(
+    docs |>
+      dplyr::filter(doc_type == "minutes") |>
+      dplyr::select(meeting_date, title),
+    by = "meeting_date",
+    suffix = c("_lf", "_existing")
+  ) |>
+  dplyr::select(
+    meeting_date,
+    title_lf,
+    title_existing
+  ) |>
+  print(n = 50)
+```
+
+Test 31
+
+```{r}
+lf_minutes |>
+  dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01")) |>
+  dplyr::anti_join(
+    docs |>
+      dplyr::filter(doc_type == "minutes") |>
+      dplyr::select(meeting_date),
+    by = "meeting_date"
+  ) |>
+  dplyr::select(meeting_date, title) |>
+  print(n = 50)
+```
+
+Test 32
+
+```{r}
+docs_merged <- dplyr::bind_rows(
+  docs,
+  lf_minutes |>
+    dplyr::mutate(meeting_date = as.Date(meeting_date, origin = "1970-01-01")) |>
+    dplyr::anti_join(
+      docs |>
+        dplyr::filter(doc_type == "minutes") |>
+        dplyr::select(meeting_date),
+      by = "meeting_date"
+    )
+)
+```
+
+Test 32
+
+```{r}
+docs_merged |>
+  dplyr::count(doc_type) |>
+  print()
+```
+
+Test 33
+
+```{r}
+source("R/build_search_data.R")
+docs_merged <- schertz_build_search_data(docs_merged, cfg = schertz_config)
+```
+
+
+Test 34
+
+```{r}
+docs_merged |>
+  dplyr::filter(grepl("Ralph Gutierrez", search_text, ignore.case = TRUE)) |>
+  dplyr::select(meeting_date, title, doc_type, text_available, source_system) |>
+  print(n = 20)
+```
+

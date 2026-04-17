@@ -1,0 +1,16 @@
+README_start_here.qmd
+*.qmd
+*.html
+*.pdf
+*.csv
+data/raw/
+cache/
+.quarto/
+_freeze/
+_site/
+site_libs/
+figures/
+docs/
+rsconnect/
+.git/
+.github/
