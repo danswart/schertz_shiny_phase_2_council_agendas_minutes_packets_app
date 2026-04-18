@@ -66,11 +66,7 @@ jobs:
             token = Sys.getenv("SHINYAPPS_TOKEN"),
             secret = Sys.getenv("SHINYAPPS_SECRET")
           )'
-          Rscript -e 'rsconnect::deployApp(
-            appDir = "deploy_app",
-            appName = Sys.getenv("SHINY_APP_NAME", unset = NULL),
-            forceUpdate = TRUE
-          )'
+          Rscript -e 'app_name <- Sys.getenv("SHINY_APP_NAME", unset = ""); rsconnect::deployApp(appDir = "deploy_app", appName = if (nzchar(app_name)) app_name else NULL, forceUpdate = TRUE)'
 
       - name: Upload refresh artifacts
         if: always()
