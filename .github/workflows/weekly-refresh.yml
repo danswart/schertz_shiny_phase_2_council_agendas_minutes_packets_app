@@ -43,7 +43,7 @@ jobs:
             "rsconnect",
             "httr2", "rvest", "xml2", "dplyr", "purrr", "readr",
             "stringr", "tibble", "tidyr", "lubridate", "pdftools",
-            "jsonlite"
+            "jsonlite", "shiny", "bslib", "DT"
           ), repos = "https://cloud.r-project.org")'
 
       - name: Run weekly refresh
@@ -54,11 +54,11 @@ jobs:
           Rscript scripts/update_data.R
 
       - name: Deploy refreshed app to shinyapps.io
+        if: github.event_name == 'workflow_dispatch'
         env:
           SHINYAPPS_NAME: ${{ secrets.SHINYAPPS_NAME }}
           SHINYAPPS_TOKEN: ${{ secrets.SHINYAPPS_TOKEN }}
           SHINYAPPS_SECRET: ${{ secrets.SHINYAPPS_SECRET }}
-          SHINY_APP_DIR: ${{ secrets.SHINY_APP_DIR }}
           SHINY_APP_NAME: ${{ secrets.SHINY_APP_NAME }}
         run: |
           Rscript -e 'rsconnect::setAccountInfo(
@@ -66,7 +66,11 @@ jobs:
             token = Sys.getenv("SHINYAPPS_TOKEN"),
             secret = Sys.getenv("SHINYAPPS_SECRET")
           )'
-          Rscript -e 'app_dir <- Sys.getenv("SHINY_APP_DIR", unset = "."); app_name <- Sys.getenv("SHINY_APP_NAME", unset = NULL); rsconnect::deployApp(appDir = app_dir, appName = app_name, forceUpdate = TRUE)'
+          Rscript -e 'rsconnect::deployApp(
+            appDir = "deploy_app",
+            appName = Sys.getenv("SHINY_APP_NAME", unset = NULL),
+            forceUpdate = TRUE
+          )'
 
       - name: Upload refresh artifacts
         if: always()
@@ -74,7 +78,9 @@ jobs:
         with:
           name: schertz-refresh-artifacts
           path: |
-            data/derived/documents.rds
-            data/derived/documents.csv
-            data/derived/refresh_metadata.csv
+            deploy_app/data/derived/documents.rds
+            deploy_app/data/derived/documents.csv
+            deploy_app/data/derived/refresh_metadata.csv
+            deploy_app/data/derived/refresh_comparison_summary.csv
+            deploy_app/data/derived/refresh_comparison_details.csv
           if-no-files-found: warn
