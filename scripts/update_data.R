@@ -60,22 +60,18 @@ csv_path <- file.path(derived_dir, "documents.csv")
 meta_path <- file.path(derived_dir, "refresh_metadata.csv")
 summary_path <- file.path(derived_dir, "refresh_comparison_summary.csv")
 details_path <- file.path(derived_dir, "refresh_comparison_details.csv")
-baseline_path <- file.path(derived_dir, "documents_deployed.rds")
+laserfiche_seed_path <- file.path(derived_dir, "laserfiche_archive_seed.rds")
 
 # -------------------------------------------------------------------
 # 1. Read baseline before overwriting anything
 # -------------------------------------------------------------------
 baseline_docs <- NULL
-if (file.exists(baseline_path)) {
-  message("Reading baseline archive from documents_deployed.rds")
-  baseline_docs <- readRDS(baseline_path)
-  baseline_docs <- tibble::as_tibble(baseline_docs)
-} else if (file.exists(rds_path)) {
-  message("documents_deployed.rds not found; using existing documents.rds as baseline")
+if (file.exists(rds_path)) {
+  message("Reading current documents.rds as baseline")
   baseline_docs <- readRDS(rds_path)
   baseline_docs <- tibble::as_tibble(baseline_docs)
 } else {
-  message("No prior baseline file found. Starting without preserved archive baseline.")
+  message("No prior documents.rds file found. Starting without baseline.")
   baseline_docs <- tibble::tibble()
 }
 
@@ -94,7 +90,7 @@ fresh_docs <- schertz_build_index(
 fresh_docs <- tibble::as_tibble(fresh_docs)
 
 # -------------------------------------------------------------------
-# 3. Optionally rebuild archive, otherwise preserve Laserfiche from baseline
+# 3. Optionally rebuild archive, otherwise preserve Laserfiche from seed
 # -------------------------------------------------------------------
 laserfiche_docs <- tibble::tibble()
 
@@ -111,16 +107,22 @@ if (isTRUE(include_archive_refresh) &&
   )
   laserfiche_docs <- tibble::as_tibble(laserfiche_docs)
 
+} else if (file.exists(laserfiche_seed_path)) {
+
+  message("Preserving Laserfiche archive rows from laserfiche_archive_seed.rds")
+  laserfiche_docs <- readRDS(laserfiche_seed_path) |>
+    tibble::as_tibble()
+
 } else if (nrow(baseline_docs) > 0 && "source_system" %in% names(baseline_docs)) {
 
-  message("Preserving Laserfiche archive rows from baseline")
+  message("Laserfiche seed not found; falling back to laserfiche rows in current baseline")
   laserfiche_docs <- baseline_docs |>
     dplyr::filter(.data$source_system == "laserfiche") |>
     tibble::as_tibble()
 
 } else {
 
-  message("No Laserfiche baseline rows available to preserve")
+  message("No Laserfiche seed or baseline rows available to preserve")
   laserfiche_docs <- tibble::tibble()
 }
 
@@ -131,7 +133,6 @@ combined_docs <- dplyr::bind_rows(fresh_docs, laserfiche_docs) |>
   dplyr::distinct(.data$doc_id, .keep_all = TRUE) |>
   dplyr::arrange(dplyr::desc(.data$meeting_date), .data$title)
 
-# Rebuild search_text and link consistently using your existing helper
 combined_docs <- schertz_build_search_data(combined_docs, cfg = schertz_config)
 
 if (!file.exists(rds_path)) {
@@ -281,25 +282,12 @@ if (nrow(old_docs) > 0) {
   }
 }
 
-# -------------------------------------------------------------------
-# 8. Preserve the new combined file as the new baseline copy too
-# -------------------------------------------------------------------
-ok_baseline <- file.copy(
-  from = rds_path,
-  to = baseline_path,
-  overwrite = TRUE
-)
-
-if (!ok_baseline) {
-  stop("Refresh failed: could not update documents_deployed.rds baseline copy.")
-}
-
 message("documents.rds: ", normalizePath(rds_path, winslash = "/", mustWork = FALSE))
 message("documents.csv: ", normalizePath(csv_path, winslash = "/", mustWork = FALSE))
 message("refresh_metadata.csv: ", normalizePath(meta_path, winslash = "/", mustWork = FALSE))
 message("refresh_comparison_summary.csv: ", normalizePath(summary_path, winslash = "/", mustWork = FALSE))
 message("refresh_comparison_details.csv: ", normalizePath(details_path, winslash = "/", mustWork = FALSE))
-message("documents_deployed.rds: ", normalizePath(baseline_path, winslash = "/", mustWork = FALSE))
+message("laserfiche_archive_seed.rds: ", normalizePath(laserfiche_seed_path, winslash = "/", mustWork = FALSE))
 message("Rows in documents: ", n_docs)
 message("Recent rows (last 400 days): ", n_recent)
 message("Added doc_ids: ", length(only_in_new))

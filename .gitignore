@@ -9,7 +9,7 @@ data/derived/documents_with_text.rds
 cache/
 cookies.txt
 *.pdf
-
+!deploy_app/data/derived/laserfiche_archive_seed.rds
 deploy_app/data/raw/
 deploy_app/data/derived/*.csv
 deploy_app/data/derived/*.rds
