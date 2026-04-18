@@ -1,0 +1,14 @@
+data/raw
+cache
+logs
+data/derived/city_hub_links.csv
+data/derived/destinyhosted_documents.csv
+data/derived/destinyhosted_raw_links.csv
+data/derived/documents.csv
+data/derived/documents_downloaded.csv
+data/derived/documents_normalized.csv
+data/derived/documents_with_text.csv
+data/derived/refresh_comparison_details.csv
+data/derived/refresh_comparison_summary.csv
+data/derived/laserfiche_archive_seed.rds
+
