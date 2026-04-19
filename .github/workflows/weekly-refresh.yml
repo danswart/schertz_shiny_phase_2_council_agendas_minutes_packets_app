@@ -1,18 +1,19 @@
-name: Schertz weekly refresh and deploy
+name: Schertz weekly refresh
 
 on:
-  workflow_dispatch:
   schedule:
     - cron: "10 6 * * 0"
       timezone: "America/Chicago"
+  workflow_dispatch:
 
-concurrency:
-  group: schertz-weekly-refresh
-  cancel-in-progress: false
+permissions:
+  contents: write
+  packages: read
 
 jobs:
-  refresh-and-deploy:
+  refresh-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Check out repository
@@ -53,7 +54,7 @@ jobs:
         run: |
           Rscript scripts/update_data.R
 
-      - name: Generate deployment manifest
+      - name: Update manifest for deployment
         run: |
           Rscript -e 'rsconnect::writeManifest(
             appDir = "deploy_app",
@@ -67,25 +68,20 @@ jobs:
             appPrimaryDoc = "app.R"
           )'
 
-      - name: Deploy refreshed app to shinyapps.io
-        if: false
-        env:
-          SHINYAPPS_NAME: ${{ secrets.SHINYAPPS_NAME }}
-          SHINYAPPS_TOKEN: ${{ secrets.SHINYAPPS_TOKEN }}
-          SHINYAPPS_SECRET: ${{ secrets.SHINYAPPS_SECRET }}
-          SHINY_APP_NAME: ${{ secrets.SHINY_APP_NAME }}
+      - name: Commit and push refreshed results
         run: |
-          Rscript -e 'rsconnect::setAccountInfo(
-            name = Sys.getenv("SHINYAPPS_NAME"),
-            token = Sys.getenv("SHINYAPPS_TOKEN"),
-            secret = Sys.getenv("SHINYAPPS_SECRET")
-          )'
-          Rscript -e 'app_name <- Sys.getenv("SHINY_APP_NAME", unset = ""); rsconnect::deployApp(
-            appDir = "deploy_app",
-            manifestPath = "deploy_app/manifest.json",
-            appName = if (nzchar(app_name)) app_name else NULL,
-            forceUpdate = TRUE
-          )'
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          git add -f deploy_app/data/derived/documents.rds || true
+          git add -f deploy_app/data/derived/refresh_metadata.csv || true
+          git add -f deploy_app/data/derived/refresh_comparison_summary.csv || true
+          git add -f deploy_app/data/derived/refresh_comparison_details.csv || true
+          git add deploy_app/manifest.json || true
+
+          git diff --staged --quiet || git commit -m "Weekly refresh - $(date +'%Y-%m-%d %H:%M UTC')"
+          git push
 
       - name: Upload refresh artifacts
         if: always()
@@ -94,7 +90,6 @@ jobs:
           name: schertz-refresh-artifacts
           path: |
             deploy_app/data/derived/documents.rds
-            deploy_app/data/derived/documents.csv
             deploy_app/data/derived/refresh_metadata.csv
             deploy_app/data/derived/refresh_comparison_summary.csv
             deploy_app/data/derived/refresh_comparison_details.csv
