@@ -68,7 +68,7 @@ jobs:
           )'
 
       - name: Deploy refreshed app to shinyapps.io
-        if: github.event_name == 'workflow_dispatch'
+        if: false
         env:
           SHINYAPPS_NAME: ${{ secrets.SHINYAPPS_NAME }}
           SHINYAPPS_TOKEN: ${{ secrets.SHINYAPPS_TOKEN }}
