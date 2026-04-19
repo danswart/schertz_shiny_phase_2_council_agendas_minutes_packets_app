@@ -53,6 +53,20 @@ jobs:
         run: |
           Rscript scripts/update_data.R
 
+      - name: Generate deployment manifest
+        run: |
+          Rscript -e 'rsconnect::writeManifest(
+            appDir = "deploy_app",
+            appFiles = c(
+              "app.R",
+              "R/00_config.R",
+              "data/derived/documents.rds",
+              "data/derived/refresh_metadata.csv"
+            ),
+            appMode = "shiny",
+            appPrimaryDoc = "app.R"
+          )'
+
       - name: Deploy refreshed app to shinyapps.io
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -84,4 +98,5 @@ jobs:
             deploy_app/data/derived/refresh_metadata.csv
             deploy_app/data/derived/refresh_comparison_summary.csv
             deploy_app/data/derived/refresh_comparison_details.csv
+            deploy_app/manifest.json
           if-no-files-found: warn
