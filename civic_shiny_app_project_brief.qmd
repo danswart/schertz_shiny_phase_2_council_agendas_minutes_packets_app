@@ -13,11 +13,11 @@ Successfully deployed to <https://danswart.shinyapps.io/schertz-council-docs/>
 
 # Purpose of this document
 
-This document is written for the assistant, not for the end user.
+This document is written for the AI assistant, not for the end user.
 
 Its purpose is to preserve the key lessons learned while building the Schertz City Council document-search Shiny prototype so that future similar projects can start from the right mental model and avoid rediscovering the same methods, pitfalls, and architecture decisions.
 
-This is intended to be fed to the assistant at the start of future similar projects.
+This is intended to be fed to the AI assistant at the start of future similar projects.
 
 Use this document as:
 
